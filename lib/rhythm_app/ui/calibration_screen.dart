@@ -27,7 +27,7 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
     super.initState();
 
     // Initialize services
-    _metronome = MetronomeService(bpm: 120);
+    _metronome = MetronomeService(bpm: 60);
     _calibration = DelayCalibrationService();
     _pitchDetection = PitchDetectionServiceSimple();
 

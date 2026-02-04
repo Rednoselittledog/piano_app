@@ -3,10 +3,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class DelayCalibrationService {
   final List<int> _delays = [];
-  DateTime? _lastBeatTime;
+  final List<DateTime> _beatTimes = []; // เก็บเวลาทุก beat
   int _beatCount = 0;
   final int _totalBeats = 8;
   int? _cachedDelayOffset;
+  bool _hasStarted = false; // เริ่มนับหรือยัง
 
   // Callback เมื่อ calibration เสร็จ
   Function(int delayOffset)? onCalibrationComplete;
@@ -21,20 +22,21 @@ class DelayCalibrationService {
 
   // บันทึกเวลาที่ metronome beat
   void onMetronomeBeat(int beatNumber) {
-    _lastBeatTime = DateTime.now();
-    print('🎵 [CALIB] Beat #$beatNumber at ${_lastBeatTime!.millisecondsSinceEpoch}');
+    final now = DateTime.now();
+    _beatTimes.add(now);
+    print('🎵 [CALIB] Beat #$beatNumber at ${now.millisecondsSinceEpoch}');
   }
 
   // เรียกเมื่อตรวจจับโน้ต
   void onNoteDetected(String note) {
-    print('🎹 [CALIB] Note detected: $note (beat count: $_beatCount/$_totalBeats)');
+    print('🎹 [CALIB] Note detected: $note (beat count: $_beatCount/$_totalBeats, started: $_hasStarted)');
 
     if (_beatCount >= _totalBeats) {
       print('⚠️ [CALIB] Already completed, ignoring note');
       return;
     }
 
-    if (_lastBeatTime == null) {
+    if (_beatTimes.isEmpty) {
       print('⚠️ [CALIB] No beat time recorded yet, ignoring note');
       return;
     }
@@ -46,8 +48,30 @@ class DelayCalibrationService {
     }
 
     final now = DateTime.now();
-    final delay = now.difference(_lastBeatTime!).inMilliseconds;
-    print('⏱️ [CALIB] Delay calculated: ${delay}ms');
+
+    // ถ้ายังไม่เริ่ม -> นี่คือ C4 แรก -> เริ่มนับจาก beat ถัดไป
+    if (!_hasStarted) {
+      _hasStarted = true;
+      print('✅ [CALIB] First C4 detected! Starting calibration from next beat...');
+      return; // ไม่นับโน้ตแรก แต่รอ beat ถัดไป
+    }
+
+    // หา beat ที่ใกล้ที่สุดก่อนหน้านี้
+    DateTime? nearestBeat;
+    for (final beatTime in _beatTimes.reversed) {
+      if (beatTime.isBefore(now)) {
+        nearestBeat = beatTime;
+        break;
+      }
+    }
+
+    if (nearestBeat == null) {
+      print('⚠️ [CALIB] Cannot find nearest beat, ignoring');
+      return;
+    }
+
+    final delay = now.difference(nearestBeat).inMilliseconds;
+    print('⏱️ [CALIB] Delay calculated: ${delay}ms (from beat at ${nearestBeat.millisecondsSinceEpoch})');
 
     // กรอง delay ที่ผิดปกติ (< 0 หรือ > 500ms)
     if (delay < 0 || delay > 500) {
@@ -102,8 +126,9 @@ class DelayCalibrationService {
 
   void reset() {
     _delays.clear();
-    _lastBeatTime = null;
+    _beatTimes.clear();
     _beatCount = 0;
+    _hasStarted = false;
   }
 
   Future<void> clearCalibration() async {

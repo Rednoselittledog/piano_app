@@ -35,7 +35,7 @@ class _PlayScreenState extends State<PlayScreen> {
     _selectedSong = SampleSongs.verySimpleTest;
 
     // Initialize services
-    _metronome = MetronomeService(bpm: 120);
+    _metronome = MetronomeService(bpm: 60);
     _pitchDetection = PitchDetectionServiceSimple();
     _calibration = DelayCalibrationService();
 
@@ -67,6 +67,13 @@ class _PlayScreenState extends State<PlayScreen> {
         if (_judge!.isComplete) {
           _finishSong();
         }
+      }
+    };
+
+    // เชื่อม metronome กับ judge
+    _metronome.onBeat = (beatNumber) {
+      if (_isPlaying && _judge != null) {
+        _judge!.onMetronomeBeat(beatNumber);
       }
     };
   }

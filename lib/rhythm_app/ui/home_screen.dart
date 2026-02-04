@@ -23,7 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _metronome = MetronomeService(bpm: 120);
+    _metronome = MetronomeService(bpm: 60);
     _pitchDetection = PitchDetectionServiceSimple();
 
     // Setup pitch detection callback

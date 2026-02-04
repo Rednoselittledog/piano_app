@@ -43,9 +43,12 @@ class RhythmJudgeService {
   final int delayOffset; // milliseconds
 
   DateTime? _startTime;
+  DateTime? _metronomeStartTime; // เวลาที่ metronome เริ่ม
   int _currentNoteIndex = 0;
   final Map<int, Judgment> _judgments = {};
   final List<RecordedNote> _recordedNotes = [];
+  final List<DateTime> _beatTimes = []; // เก็บเวลาทุก beat
+  bool _hasStarted = false; // เริ่มนับหรือยัง
 
   // Callback
   Function(Judgment judgment)? onJudgment;
@@ -55,12 +58,43 @@ class RhythmJudgeService {
     required this.delayOffset,
   });
 
+  // เรียกเมื่อ metronome beat
+  void onMetronomeBeat(int beatNumber) {
+    final now = DateTime.now();
+    _beatTimes.add(now);
+    if (_metronomeStartTime == null) {
+      _metronomeStartTime = now;
+    }
+    print('🎵 [JUDGE] Beat #$beatNumber at ${now.millisecondsSinceEpoch}');
+  }
+
   Map<int, Judgment> get judgments => Map.unmodifiable(_judgments);
   List<RecordedNote> get recordedNotes => List.unmodifiable(_recordedNotes);
   int get currentNoteIndex => _currentNoteIndex;
   bool get isComplete => _currentNoteIndex >= song.notes.length;
 
   void onNoteDetected(String detectedNote, DateTime detectedTime) {
+    print('🎹 [JUDGE] Note detected: $detectedNote (current index: $_currentNoteIndex/${song.notes.length}, started: $_hasStarted)');
+
+    // ถ้าเล่นจบแล้ว ไม่ต้องให้คะแนน
+    if (_currentNoteIndex >= song.notes.length) return;
+
+    final expectedNote = song.notes[_currentNoteIndex];
+
+    // ถ้ายังไม่เริ่ม -> เช็คว่าตรงกับโน้ตแรกหรือไม่
+    if (!_hasStarted) {
+      // เช็คว่าตรงกับโน้ตแรกในเพลงหรือไม่ (±2 semitones)
+      if (_checkNoteMatch(detectedNote, expectedNote.note)) {
+        _hasStarted = true;
+        _startTime = detectedTime;
+        print('✅ [JUDGE] First note matched! Starting judgment from note: $detectedNote (expected: ${expectedNote.note})');
+        // ไม่ return เพื่อให้ประเมินโน้ตแรกด้วย
+      } else {
+        print('⚠️ [JUDGE] Waiting for first note (expected: ${expectedNote.note}, got: $detectedNote)');
+        return; // รอโน้ตแรกที่ถูก
+      }
+    }
+
     // บันทึกโน้ตที่กด
     if (_startTime == null) {
       _startTime = detectedTime;
@@ -70,18 +104,42 @@ class RhythmJudgeService {
       _recordedNotes.add(RecordedNote(note: detectedNote, timestamp: elapsed));
     }
 
-    // ถ้าเล่นจบแล้ว ไม่ต้องให้คะแนน
-    if (_currentNoteIndex >= song.notes.length) return;
+    // คำนวณเวลาที่คาดหวัง (จากโน้ตในเพลง)
+    final expectedTime = expectedNote.startTime;
 
-    final expectedNote = song.notes[_currentNoteIndex];
+    // หา beat ที่ใกล้ที่สุดกับเวลาที่คาดหวัง
+    DateTime? targetBeat;
+    if (_metronomeStartTime != null) {
+      final beatDuration = 60.0 / song.bpm; // วินาทีต่อ beat
+      final expectedBeatNumber = (expectedTime / beatDuration).round();
+      final targetBeatTime = _metronomeStartTime!.add(Duration(milliseconds: (expectedBeatNumber * beatDuration * 1000).round()));
 
-    // คำนวณเวลาจริง (ชดเชย delay)
-    final elapsedMs = detectedTime.difference(_startTime!).inMilliseconds - delayOffset;
-    final actualTime = elapsedMs / 1000.0;
+      // หา beat ที่ใกล้ที่สุดกับ targetBeatTime
+      for (final beatTime in _beatTimes) {
+        if ((beatTime.difference(targetBeatTime).inMilliseconds.abs()) < 100) {
+          targetBeat = beatTime;
+          break;
+        }
+      }
+    }
+
+    // ถ้าหา beat ไม่เจอ -> ใช้วิธีเดิม (อ้างอิงจาก _startTime)
+    double actualTime;
+    if (targetBeat != null) {
+      // วัด delay จาก beat ที่ใกล้ที่สุด
+      final delayFromBeat = detectedTime.difference(targetBeat).inMilliseconds - delayOffset;
+      actualTime = expectedTime + (delayFromBeat / 1000.0);
+      print('⏱️ [JUDGE] Using metronome beat: delay=${delayFromBeat}ms from beat at ${targetBeat.millisecondsSinceEpoch}');
+    } else {
+      // ใช้วิธีเดิม (fallback)
+      final elapsedMs = detectedTime.difference(_startTime!).inMilliseconds - delayOffset;
+      actualTime = elapsedMs / 1000.0;
+      print('⚠️ [JUDGE] No metronome beat found, using startTime reference');
+    }
 
     // คำนวณความคลาดเคลื่อนเป็น %
     final beatDuration = 60.0 / song.bpm; // วินาทีต่อ beat
-    final errorMs = ((actualTime - expectedNote.startTime) * 1000).abs();
+    final errorMs = ((actualTime - expectedTime) * 1000).abs();
     final errorPercent = (errorMs / (beatDuration * 1000)) * 100;
 
     // ให้คะแนน
@@ -105,13 +163,14 @@ class RhythmJudgeService {
       errorPercent: errorPercent,
       expectedNote: expectedNote.note,
       playedNote: detectedNote,
-      expectedTime: expectedNote.startTime,
+      expectedTime: expectedTime,
       actualTime: actualTime,
     );
 
     _judgments[_currentNoteIndex] = judgment;
     _currentNoteIndex++;
 
+    print('✅ [JUDGE] Judgment: ${judgment.level} (error: ${errorPercent.toStringAsFixed(1)}%)');
     onJudgment?.call(judgment);
   }
 
@@ -144,9 +203,12 @@ class RhythmJudgeService {
 
   void reset() {
     _startTime = null;
+    _metronomeStartTime = null;
     _currentNoteIndex = 0;
     _judgments.clear();
     _recordedNotes.clear();
+    _beatTimes.clear();
+    _hasStarted = false;
   }
 
   // สถิติ
