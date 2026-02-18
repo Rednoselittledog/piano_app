@@ -24,7 +24,7 @@ class MetronomeService {
       await _metronome.init(
         'assets/audio/click.wav',
         bpm: _bpm,
-        volume: 15, // ลดเสียงมาก ๆ เพื่อไม่ให้รบกวน microphone (0-100)
+        volume: 15, 
         enableTickCallback: true,
         timeSignature: _beatsPerMeasure,
       );

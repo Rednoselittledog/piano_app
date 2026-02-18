@@ -13,8 +13,8 @@ class PitchDetectionServiceSimple {
 
   // YIN parameters (ตาม Beethoven)
   static const int _sampleRate = 44100;
-  static const int _bufferSize = 4096; // ใหญ่กว่าเพื่อ low frequency accuracy
-  static const double _yinThreshold = 0.05; // ตาม Beethoven
+  static const int _bufferSize = 4096; 
+  static const double _yinThreshold = 0.05; 
   static const double _levelThreshold = -40.0; // dBFS
 
   // Smoothing

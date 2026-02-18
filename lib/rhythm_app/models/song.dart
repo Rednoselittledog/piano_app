@@ -2,7 +2,7 @@ class Song {
   final String id;
   final String title;
   final int bpm;
-  final String timeSignature; // "4/4", "3/4", etc.
+  final String timeSignature; 
   final List<NoteEvent> notes;
 
   Song({
