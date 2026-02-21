@@ -9,6 +9,11 @@ class DelayCalibrationService {
   int? _cachedDelayOffset;
   bool _hasStarted = false; // เริ่มนับหรือยัง
 
+  // Same Note Debouncing
+  String? _lastDetectedNote;
+  DateTime? _lastDetectedTime;
+  static const int _debounceWindowMs = 600; // Fixed 600ms window
+
   // Callback เมื่อ calibration เสร็จ
   Function(int delayOffset)? onCalibrationComplete;
 
@@ -49,9 +54,21 @@ class DelayCalibrationService {
 
     final now = DateTime.now();
 
+    // Same Note Debouncing - ป้องกันนับโน้ตซ้ำ
+    if (_lastDetectedNote == note && _lastDetectedTime != null) {
+      final elapsedMs = now.difference(_lastDetectedTime!).inMilliseconds;
+
+      if (elapsedMs < _debounceWindowMs) {
+        print('⚠️ [CALIB-DEBOUNCE] Ignoring duplicate $note (${elapsedMs}ms < ${_debounceWindowMs}ms window)');
+        return;
+      }
+    }
+
     // ถ้ายังไม่เริ่ม -> นี่คือ C4 แรก -> เริ่มนับจาก beat ถัดไป
     if (!_hasStarted) {
       _hasStarted = true;
+      _lastDetectedNote = note;
+      _lastDetectedTime = now;
       print('✅ [CALIB] First C4 detected! Starting calibration from next beat...');
       return; // ไม่นับโน้ตแรก แต่รอ beat ถัดไป
     }
@@ -82,6 +99,10 @@ class DelayCalibrationService {
     _delays.add(delay);
     _beatCount++;
     print('✅ [CALIB] Delay accepted! Progress: $_beatCount/$_totalBeats');
+
+    // อัพเดท debounce tracking
+    _lastDetectedNote = note;
+    _lastDetectedTime = now;
 
     onProgress?.call(_beatCount, _totalBeats);
 
@@ -129,6 +150,8 @@ class DelayCalibrationService {
     _beatTimes.clear();
     _beatCount = 0;
     _hasStarted = false;
+    _lastDetectedNote = null;
+    _lastDetectedTime = null;
   }
 
   Future<void> clearCalibration() async {

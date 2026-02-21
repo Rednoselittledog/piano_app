@@ -177,7 +177,7 @@ class ResultScreen extends StatelessWidget {
                         'Expected: ${judgment.expectedNote} | Played: ${judgment.playedNote}',
                       ),
                       subtitle: Text(
-                        'Error: ${judgment.errorPercent.toStringAsFixed(1)}%',
+                        _getTimingMessage(judgment),
                       ),
                       trailing: Icon(
                         judgment.level == JudgmentLevel.perfect
@@ -262,5 +262,18 @@ class ResultScreen extends StatelessWidget {
         Text(label),
       ],
     );
+  }
+
+  String _getTimingMessage(Judgment judgment) {
+    final timingDiff = judgment.actualTime - judgment.expectedTime;
+    final timingMs = (timingDiff * 1000).round();
+
+    if (timingMs > 0) {
+      return 'กดช้า ${timingMs}ms (${judgment.errorPercent.toStringAsFixed(1)}%)';
+    } else if (timingMs < 0) {
+      return 'กดเร็ว ${(-timingMs)}ms (${judgment.errorPercent.toStringAsFixed(1)}%)';
+    } else {
+      return 'ตรงเวลาพอดี! (${judgment.errorPercent.toStringAsFixed(1)}%)';
+    }
   }
 }

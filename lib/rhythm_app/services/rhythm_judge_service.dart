@@ -50,6 +50,10 @@ class RhythmJudgeService {
   final List<DateTime> _beatTimes = []; // เก็บเวลาทุก beat
   bool _hasStarted = false; // เริ่มนับหรือยัง
 
+  // Same Note Debouncing
+  String? _lastDetectedNote;
+  DateTime? _lastDetectedTime;
+
   // Callback
   Function(Judgment judgment)? onJudgment;
 
@@ -81,13 +85,36 @@ class RhythmJudgeService {
 
     final expectedNote = song.notes[_currentNoteIndex];
 
+    // Same Note Debouncing - ป้องกันนับโน้ตซ้ำ
+    if (_lastDetectedNote == detectedNote && _lastDetectedTime != null) {
+      final windowMs = _getDebounceWindow(expectedNote);
+      final elapsedMs = detectedTime.difference(_lastDetectedTime!).inMilliseconds;
+
+      if (elapsedMs < windowMs) {
+        print('⚠️ [DEBOUNCE] Ignoring duplicate $detectedNote (${elapsedMs}ms < ${windowMs}ms window)');
+        return;
+      }
+    }
+
     // ถ้ายังไม่เริ่ม -> เช็คว่าตรงกับโน้ตแรกหรือไม่
     if (!_hasStarted) {
       // เช็คว่าตรงกับโน้ตแรกในเพลงหรือไม่ (±2 semitones)
       if (_checkNoteMatch(detectedNote, expectedNote.note)) {
         _hasStarted = true;
         _startTime = detectedTime;
-        print('✅ [JUDGE] First note matched! Starting judgment from note: $detectedNote (expected: ${expectedNote.note})');
+
+        // ทิ้ง beat times ก่อนโน้ตแรก และเริ่มใหม่จาก beat ที่ใกล้ที่สุด
+        final nearestBeatIndex = _beatTimes.lastIndexWhere((beat) => beat.isBefore(detectedTime));
+        if (nearestBeatIndex >= 0) {
+          _metronomeStartTime = _beatTimes[nearestBeatIndex];
+          _beatTimes.removeRange(0, nearestBeatIndex);
+          print('✅ [JUDGE] First note matched! Starting from nearest beat at ${_metronomeStartTime!.millisecondsSinceEpoch}');
+        } else {
+          _metronomeStartTime = _beatTimes.isNotEmpty ? _beatTimes.first : detectedTime;
+          print('✅ [JUDGE] First note matched! No beat before note, using first beat');
+        }
+
+        print('✅ [JUDGE] Note: $detectedNote (expected: ${expectedNote.note})');
         // ไม่ return เพื่อให้ประเมินโน้ตแรกด้วย
       } else {
         print('⚠️ [JUDGE] Waiting for first note (expected: ${expectedNote.note}, got: $detectedNote)');
@@ -170,8 +197,21 @@ class RhythmJudgeService {
     _judgments[_currentNoteIndex] = judgment;
     _currentNoteIndex++;
 
+    // อัพเดท debounce tracking
+    _lastDetectedNote = detectedNote;
+    _lastDetectedTime = detectedTime;
+
     print('✅ [JUDGE] Judgment: ${judgment.level} (error: ${errorPercent.toStringAsFixed(1)}%)');
     onJudgment?.call(judgment);
+  }
+
+  /// คำนวณ debounce window จาก note duration
+  /// ใช้ 80% ของ note duration เพื่อบล็อกโน้ตซ้ำ
+  int _getDebounceWindow(NoteEvent note) {
+    final beatDuration = 60.0 / song.bpm; // วินาทีต่อ beat
+    final noteDuration = note.duration * beatDuration; // วินาทีของโน้ตนี้
+    final windowSeconds = noteDuration * 0.8; // ใช้ 80% ของ note duration
+    return (windowSeconds * 1000).round(); // แปลงเป็น milliseconds
   }
 
   bool _checkNoteMatch(String played, String expected) {
@@ -209,6 +249,8 @@ class RhythmJudgeService {
     _recordedNotes.clear();
     _beatTimes.clear();
     _hasStarted = false;
+    _lastDetectedNote = null;
+    _lastDetectedTime = null;
   }
 
   // สถิติ
