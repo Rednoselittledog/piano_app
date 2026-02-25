@@ -46,7 +46,8 @@ class DelayCalibrationService {
       return;
     }
 
-    // For calibration, only accept C4 notes
+    // For calibration, only accept C4 notes (exact match)
+    // ไม่ยอมรับ C#4, B3 หรือโน้ตอื่น ๆ ที่ใกล้เคียง
     if (note != 'C4') {
       print('❌ [CALIB] Wrong note (expected C4, got $note)');
       return;

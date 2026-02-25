@@ -54,6 +54,10 @@ class RhythmJudgeService {
   String? _lastDetectedNote;
   DateTime? _lastDetectedTime;
 
+  // Onset-based note detection
+  String? _lastAcceptedNote;
+  DateTime? _lastAcceptedTime;
+
   // Callback
   Function(Judgment judgment)? onJudgment;
 
@@ -77,22 +81,51 @@ class RhythmJudgeService {
   int get currentNoteIndex => _currentNoteIndex;
   bool get isComplete => _currentNoteIndex >= song.notes.length;
 
+  /// เรียกเมื่อ onset detection ตรวจจับโน้ตใหม่
+  /// ใช้แทน onNoteDetected เพื่อป้องกันเสียงค้างจากโน้ตก่อนหน้า
+  void onNoteOnset(String detectedNote, DateTime onsetTime) {
+    print('💥 [JUDGE-ONSET] Note onset: $detectedNote (current index: $_currentNoteIndex/${song.notes.length})');
+    _processNote(detectedNote, onsetTime, isOnset: true);
+  }
+
+  /// เรียกเมื่อ pitch detection ตรวจจับโน้ต (sustained)
+  /// ใช้สำหรับ fallback เมื่อไม่มี onset
   void onNoteDetected(String detectedNote, DateTime detectedTime) {
     print('🎹 [JUDGE] Note detected: $detectedNote (current index: $_currentNoteIndex/${song.notes.length}, started: $_hasStarted)');
+    _processNote(detectedNote, detectedTime, isOnset: false);
+  }
 
+  /// ประมวลผลโน้ตที่ตรวจจับได้
+  void _processNote(String detectedNote, DateTime detectedTime, {required bool isOnset}) {
     // ถ้าเล่นจบแล้ว ไม่ต้องให้คะแนน
     if (_currentNoteIndex >= song.notes.length) return;
 
     final expectedNote = song.notes[_currentNoteIndex];
 
-    // Same Note Debouncing - ป้องกันนับโน้ตซ้ำ
-    if (_lastDetectedNote == detectedNote && _lastDetectedTime != null) {
-      final windowMs = _getDebounceWindow(expectedNote);
-      final elapsedMs = detectedTime.difference(_lastDetectedTime!).inMilliseconds;
+    // ถ้าเป็น onset → ยอมรับทันที (ข้าม debouncing)
+    // ถ้าไม่ใช่ onset → ต้องผ่าน Same Note Debouncing
+    if (!isOnset) {
+      if (_lastDetectedNote == detectedNote && _lastDetectedTime != null) {
+        final windowMs = _getDebounceWindow(expectedNote);
+        final elapsedMs = detectedTime.difference(_lastDetectedTime!).inMilliseconds;
 
-      if (elapsedMs < windowMs) {
-        print('⚠️ [DEBOUNCE] Ignoring duplicate $detectedNote (${elapsedMs}ms < ${windowMs}ms window)');
-        return;
+        if (elapsedMs < windowMs) {
+          print('⚠️ [DEBOUNCE] Ignoring duplicate $detectedNote (${elapsedMs}ms < ${windowMs}ms window)');
+          return;
+        }
+      }
+
+      // ป้องกันเสียงค้าง: ถ้าโน้ตที่คาดหวังต่างจากโน้ตที่ยอมรับล่าสุด
+      // แต่ detect ได้โน้ตเดียวกับโน้ตที่ยอมรับล่าสุด → ปฏิเสธ (เสียงค้าง)
+      if (_lastAcceptedNote != null && _lastAcceptedTime != null) {
+        final timeSinceLastAccepted = detectedTime.difference(_lastAcceptedTime!).inMilliseconds;
+
+        if (expectedNote.note != _lastAcceptedNote &&
+            detectedNote == _lastAcceptedNote &&
+            timeSinceLastAccepted < 1000) {
+          print('⚠️ [SUSTAIN-REJECT] Ignoring sustained $detectedNote (expected: ${expectedNote.note}, last accepted: $_lastAcceptedNote, ${timeSinceLastAccepted}ms ago)');
+          return;
+        }
       }
     }
 
@@ -197,9 +230,11 @@ class RhythmJudgeService {
     _judgments[_currentNoteIndex] = judgment;
     _currentNoteIndex++;
 
-    // อัพเดท debounce tracking
+    // อัพเดท tracking
     _lastDetectedNote = detectedNote;
     _lastDetectedTime = detectedTime;
+    _lastAcceptedNote = detectedNote;
+    _lastAcceptedTime = detectedTime;
 
     print('✅ [JUDGE] Judgment: ${judgment.level} (error: ${errorPercent.toStringAsFixed(1)}%)');
     onJudgment?.call(judgment);
@@ -219,9 +254,10 @@ class RhythmJudgeService {
     final expectedSemitone = _noteToSemitone(expected);
     final playedSemitone = _noteToSemitone(played);
 
-    // ยอมรับโน้ตที่ห่างกัน ±2 semitones
+    // ยอมรับโน้ตที่ห่างกัน ±1 semitone
+    // เปลี่ยนจาก ±2 semitones เป็น ±1 เพื่อป้องกันเสียงค้างจากโน้ตก่อนหน้า
     final difference = (playedSemitone - expectedSemitone).abs();
-    return difference <= 2;
+    return difference <= 1;
   }
 
   int _noteToSemitone(String note) {
@@ -251,6 +287,8 @@ class RhythmJudgeService {
     _hasStarted = false;
     _lastDetectedNote = null;
     _lastDetectedTime = null;
+    _lastAcceptedNote = null;
+    _lastAcceptedTime = null;
   }
 
   // สถิติ

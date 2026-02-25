@@ -79,6 +79,17 @@ class _PlayScreenState extends State<PlayScreen> {
   }
 
   void _setupPitchDetection() {
+    // Onset Detection callback - ใช้สำหรับโน้ตใหม่
+    _pitchDetection.onNoteOnset = (note, freq, onsetTime) {
+      if (mounted) {
+        setState(() => _currentNote = note);
+      }
+      if (_isPlaying && _judge != null) {
+        _judge!.onNoteOnset(note, onsetTime);
+      }
+    };
+
+    // Pitch Detection callback - fallback สำหรับ sustained notes
     _pitchDetection.onNoteDetected = (note, freq, prob) {
       if (mounted) {
         setState(() => _currentNote = note);

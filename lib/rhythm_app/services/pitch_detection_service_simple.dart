@@ -13,16 +13,29 @@ class PitchDetectionServiceSimple {
 
   // YIN parameters (ตาม Beethoven)
   static const int _sampleRate = 44100;
-  static const int _bufferSize = 4096; 
-  static const double _yinThreshold = 0.05; 
+  static const int _bufferSize = 4096;
+  static const double _yinThreshold = 0.05;
   static const double _levelThreshold = -40.0; // dBFS
+  static const double _minConfidence = 0.95; // ต้อง confidence >= 95%
+  static const double _minFrequency = 100.0; // Hz - กรอง freq ต่ำเกินไป (harmonics/noise)
 
   // Smoothing
   final List<double> _pitchHistory = [];
   DateTime _lastUpdate = DateTime.now();
+  int _bufferCount = 0; // นับจำนวน buffer ที่ประมวลผลแล้ว
+
+  // Onset Detection
+  double _lastRMS = 0.0;
+  DateTime? _lastOnsetTime;
+  DateTime? _pendingOnsetTime; // เก็บเวลา onset ที่รอส่ง callback
+  static const double _onsetThreshold = 2.5; // RMS ต้องเพิ่มขึ้น 2.5 เท่า
+  static const int _onsetMinIntervalMs = 100; // onset ต่ำสุด 100ms ห่างกัน
 
   // Callback เมื่อตรวจจับโน้ต
   Function(String note, double frequency, double confidence)? onNoteDetected;
+
+  // Callback เมื่อตรวจจับ onset (note attack)
+  Function(String note, double frequency, DateTime onsetTime)? onNoteOnset;
 
   bool get isRecording => _isRecording;
 
@@ -103,18 +116,42 @@ class PitchDetectionServiceSimple {
       // เสียงเบาเกินไป → เคลียร์ history ถ้าเงียบนาน
       if (DateTime.now().difference(_lastUpdate).inMilliseconds > 500) {
         _pitchHistory.clear();
+        _lastRMS = 0.0; // รีเซ็ต onset tracking
         print('🔇 [YIN] Below threshold (${dBFS.toStringAsFixed(1)} dBFS), clearing history');
       }
       return;
     }
 
-    // 2. YIN: Difference Function
+    // 2. Onset Detection - ตรวจจับการเพิ่มขึ้นของพลังงานกะทันหัน
+    final now = DateTime.now();
+
+    if (_lastRMS > 0.0) {
+      final rmsRatio = rms / _lastRMS;
+
+      // ตรวจจับ onset: RMS เพิ่มขึ้นกะทันหัน และห่างจาก onset ล่าสุดพอ
+      if (rmsRatio >= _onsetThreshold) {
+        if (_lastOnsetTime == null ||
+            now.difference(_lastOnsetTime!).inMilliseconds >= _onsetMinIntervalMs) {
+          _lastOnsetTime = now;
+          _pendingOnsetTime = now; // เก็บเวลา onset ไว้รอส่ง callback
+          print('💥 [ONSET] Detected! RMS ratio: ${rmsRatio.toStringAsFixed(2)}x (pending callback)');
+
+          // เคลียร์ history เพื่อให้ YIN buffer ถัดไปเป็น pitch ใหม่
+          _pitchHistory.clear();
+        }
+      }
+    }
+
+    _lastRMS = rms;
+    _bufferCount++;
+
+    // 3. YIN: Difference Function
     final yinBuffer = _differenceFunction(buffer);
 
-    // 3. YIN: Cumulative Mean Normalized Difference (CMND)
+    // 4. YIN: Cumulative Mean Normalized Difference (CMND)
     _cumulativeMeanNormalizedDifference(yinBuffer);
 
-    // 4. YIN: Absolute Threshold + Parabolic Interpolation
+    // 5. YIN: Absolute Threshold + Parabolic Interpolation
     final result = _absoluteThreshold(yinBuffer);
     if (result == null) {
       print('🔕 [YIN] No pitch detected (threshold not met)');
@@ -124,10 +161,21 @@ class PitchDetectionServiceSimple {
     final tau = result['tau']!;
     final confidence = 1.0 - result['value']!; // invert ให้เป็น confidence
 
-    // 5. คำนวณ frequency จาก tau
+    // 6. คำนวณ frequency จาก tau
     final frequency = _sampleRate / tau;
 
     print('🎵 [YIN] tau=$tau, freq=${frequency.toStringAsFixed(1)} Hz, confidence=${confidence.toStringAsFixed(3)}');
+
+    // กรองผลลัพธ์ที่ไม่น่าเชื่อถือ
+    if (confidence < _minConfidence) {
+      print('⚠️ [YIN] Low confidence (${confidence.toStringAsFixed(3)} < $_minConfidence), ignoring');
+      return;
+    }
+
+    if (frequency < _minFrequency) {
+      print('⚠️ [YIN] Frequency too low (${frequency.toStringAsFixed(1)} Hz < $_minFrequency Hz), ignoring');
+      return;
+    }
 
     _updateNote(frequency, confidence);
   }
@@ -244,13 +292,21 @@ class PitchDetectionServiceSimple {
     _pitchHistory.add(pitch);
     if (_pitchHistory.length > 5) _pitchHistory.removeAt(0);
 
-    // Throttle callback ทุก 150ms
+    final avgPitch = _pitchHistory.reduce((a, b) => a + b) / _pitchHistory.length;
+    final note = _getNoteFromHz(avgPitch);
+
+    // ถ้ามี pending onset → ส่ง onset callback ด้วย pitch ใหม่
+    if (_pendingOnsetTime != null) {
+      print('✅ [ONSET-DELAYED] Note: $note (${avgPitch.toStringAsFixed(1)} Hz) after YIN success');
+      onNoteOnset?.call(note, avgPitch, _pendingOnsetTime!);
+      _pendingOnsetTime = null;
+      _lastUpdate = DateTime.now();
+      return; // ส่งแค่ onset callback ไม่ต้องส่ง onNoteDetected
+    }
+
+    // Throttle callback ทุก 150ms (สำหรับ sustained notes)
     if (DateTime.now().difference(_lastUpdate).inMilliseconds > 150) {
-      final avgPitch = _pitchHistory.reduce((a, b) => a + b) / _pitchHistory.length;
-      final note = _getNoteFromHz(avgPitch);
-
       print('✅ [YIN] Note: $note (${avgPitch.toStringAsFixed(1)} Hz, conf=${confidence.toStringAsFixed(3)})');
-
       onNoteDetected?.call(note, avgPitch, confidence);
       _lastUpdate = DateTime.now();
     }
@@ -287,6 +343,10 @@ class PitchDetectionServiceSimple {
 
     _isRecording = false;
     _pitchHistory.clear();
+    _bufferCount = 0;
+    _lastRMS = 0.0;
+    _lastOnsetTime = null;
+    _pendingOnsetTime = null;
     print('🛑 [YIN] Stopped');
   }
 

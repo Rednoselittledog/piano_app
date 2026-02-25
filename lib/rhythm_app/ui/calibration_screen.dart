@@ -72,10 +72,19 @@ class _CalibrationScreenState extends State<CalibrationScreen> {
       }
     };
 
-    _pitchDetection.onNoteDetected = (note, freq, prob) {
+    // Onset Detection callback - ใช้สำหรับ calibration (แม่นยำกว่า)
+    _pitchDetection.onNoteOnset = (note, freq, onsetTime) {
       if (_isCalibrating && mounted) {
         setState(() => _currentNote = note);
         _calibration.onNoteDetected(note);
+      }
+    };
+
+    // Pitch Detection callback - fallback
+    _pitchDetection.onNoteDetected = (note, freq, prob) {
+      if (_isCalibrating && mounted) {
+        setState(() => _currentNote = note);
+        // ใช้ onset เป็นหลัก ถ้าไม่มี onset ถึงใช้ตัวนี้
       }
     };
   }
